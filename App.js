@@ -16,7 +16,7 @@ import { StyleSheet, Text, View, TouchableOpacity, Dimensions } from 'react-nati
 const dimensions = Dimensions.get('window')
 
 const HOST = process.env.HOST || 'ws://172.20.1.150:8000'
-
+const isFront = true // Use Front camera?
 const DEFAULT_ICE = {
 // we need to fork react-native-webrtc for relay-only to work.
 //  iceTransportPolicy: "relay",
@@ -55,11 +55,16 @@ export default class App extends React.Component {
   }
 
   render() {
+    console.info(this.state.localStreamURL)
     return (
       <View style={styles.container}>
         <View style={styles.video}>
           <View style={styles.callerVideo}>
-            <View style={styles.videoWidget}/>
+            <View style={styles.videoWidget}>
+              { this.state.localStreamURL && 
+                <RTCView streamURL={this.state.localStreamURL} style={styles.rtcView}/> 
+              }
+            </View>
           </View>
           <View style={styles.calleeVideo}>
             <View style={styles.videoWidget}/>
@@ -128,8 +133,7 @@ export default class App extends React.Component {
     };
 
     // Setup Camera & Audio
-
-    /*MediaStreamTrack
+    MediaStreamTrack
       .getSources()
       .then(sourceInfos => {
         console.log(sourceInfos);
@@ -154,10 +158,14 @@ export default class App extends React.Component {
         });
       })
       .then(stream => {
-        
-        return stream
+        self.setState({
+          localStreamURL: stream.toURL()
+        })
+        self.stream = stream
       })
-      .catch(logError)*/
+      .catch(e => {
+        console.error('Failed to setup stream:', e.message)
+      })
   }
 }
 
@@ -221,5 +229,11 @@ const styles = StyleSheet.create({
     width: dimensions.width / 2,
     borderWidth: 1,
     borderColor: '#eee'
+  },
+  rtcView: {
+    flex: 1,
+    width: dimensions.width / 2,
+    backgroundColor: '#f00',
+    position: 'relative'
   }
 });

@@ -1,6 +1,7 @@
 package com.reactnativewebrtcsample;
 
 import com.facebook.react.ReactActivity;
+import com.oney.WebRTCModule.WebRTCModulePackage;
 
 public class MainActivity extends ReactActivity {
 
