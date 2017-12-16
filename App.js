@@ -1,7 +1,7 @@
 import React from 'react';
 import SocketIO from 'socket.io-client'
 import WebSocketClient from 'reconnecting-websocket'
-import WebRTC from 'react-native-webrtc'
+import WebRTCLib from 'react-native-webrtc'
 const {
   RTCPeerConnection,
   RTCIceCandidate,
@@ -10,7 +10,7 @@ const {
   MediaStream,
   MediaStreamTrack,
   getUserMedia,
-} = WebRTC;
+} = WebRTCLib;
 import { StyleSheet, Text, View, TouchableOpacity, Dimensions } from 'react-native';
 
 const dimensions = Dimensions.get('window')
@@ -47,6 +47,8 @@ export default class App extends React.Component {
     super(props)
     this.handleConnect = this.handleConnect.bind(this)
     this.on_ICE_Connection_State_Change = this.on_ICE_Connection_State_Change.bind(this)
+    this.on_Add_Stream = this.on_Add_Stream.bind(this)
+
     this.state = {
       connected: false,
       ice_connection_state: '',
@@ -67,7 +69,11 @@ export default class App extends React.Component {
             </View>
           </View>
           <View style={styles.calleeVideo}>
-            <View style={styles.videoWidget}/>
+            <View style={styles.videoWidget}>
+              { this.state.remoteStreamURL && 
+                <RTCView streamURL={this.state.remoteStreamURL} style={styles.rtcView}/> 
+              }
+            </View>
           </View>
         </View>
         <View style={ this.state.connected ? styles.onlineCircle : styles.offlineCircle}/>
@@ -86,13 +92,23 @@ export default class App extends React.Component {
     console.info('Create Peer')
     const peer = new WebRTCLib.RTCPeerConnection(DEFAULT_ICE)
     peer.oniceconnectionstatechange = this.on_ICE_Connection_State_Change
-
+    peer.onaddstream = this.on_Add_Stream
+    this.peer = peer
   }
 
   on_ICE_Connection_State_Change(e) {
+    console.info('ICE Connection State Changed:', e.target.iceConnectionState)
     this.setState({
       ice_connection_state: e.target.iceConnectionState
     })
+  }
+
+  on_Add_Stream(e) {
+    console.info('Remote Stream Added:', e.stream)
+    this.setState({
+      remoteStreamURL: e.stream.toURL()
+    })
+    this.remoteStream = e.stream
   }
 
   componentDidMount() {
@@ -161,7 +177,7 @@ export default class App extends React.Component {
         self.setState({
           localStreamURL: stream.toURL()
         })
-        self.stream = stream
+        self.localStream = stream
       })
       .catch(e => {
         console.error('Failed to setup stream:', e.message)
