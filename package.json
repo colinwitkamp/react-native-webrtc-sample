@@ -16,9 +16,14 @@
     "preset": "jest-expo"
   },
   "dependencies": {
+    "babel-preset-react-native-stage-0": "^1.0.1",
     "react": "16.0.0",
     "react-native": "0.50.3",
     "react-native-socketio": "^0.3.0",
-    "react-native-webrtc": "^1.58.3"
+    "react-native-swift-socketio": "^0.0.6",
+    "react-native-webrtc": "^1.58.3",
+    "reconnecting-websocket": "^3.2.2",
+    "socket.io": "^2.0.4",
+    "socket.io-client": "1.7.4"
   }
 }
