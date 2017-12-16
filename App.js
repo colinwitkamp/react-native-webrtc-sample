@@ -2,6 +2,8 @@ import React from 'react';
 import SocketIO from 'socket.io-client'
 import WebSocketClient from 'reconnecting-websocket'
 import WebRTCLib from 'react-native-webrtc'
+import UUID from 'react-native-device-uuid'
+
 const {
   RTCPeerConnection,
   RTCIceCandidate,
@@ -48,7 +50,12 @@ export default class App extends React.Component {
     this.handleConnect = this.handleConnect.bind(this)
     this.on_ICE_Connection_State_Change = this.on_ICE_Connection_State_Change.bind(this)
     this.on_Add_Stream = this.on_Add_Stream.bind(this)
-
+    this.on_ICE_Candiate = this.on_ICE_Candiate.bind(this)
+    this.sendMessage = this.sendMessage.bind(this)
+    this.on_Offer_Received = this.on_Offer_Received.bind(this)
+    this.on_Answer_Received = this.on_Answer_Received.bind(this)
+    this.setupWebRTC = this.setupWebRTC.bind(this)
+    this.handleAnswer = this.handleAnswer.bind(this)
     this.state = {
       connected: false,
       ice_connection_state: '',
@@ -57,7 +64,6 @@ export default class App extends React.Component {
   }
 
   render() {
-    console.info(this.state.localStreamURL)
     return (
       <View style={styles.container}>
         <View style={styles.video}>
@@ -78,22 +84,62 @@ export default class App extends React.Component {
         </View>
         <View style={ this.state.connected ? styles.onlineCircle : styles.offlineCircle}/>
         <View style={styles.bottomView}>
-          <TouchableOpacity onPress={this.handleConnect}>
+          <TouchableOpacity onPress={this.handleConnect} disabled={this.state.offer_received}>
             <Text style={styles.connect}>
               Connect
             </Text>
           </TouchableOpacity>
+          { // Offer received and offer not answered
+            (this.state.offer_received && !this.state.offer_answered) &&
+            <TouchableOpacity onPress={this.handleAnswer}>
+              <Text style={styles.connect}>
+                Answer
+              </Text>
+            </TouchableOpacity>
+          }
         </View>
       </View>
     );
   }
 
-  handleConnect(e) {
-    console.info('Create Peer')
+  async setupWebRTC() {
+    const self = this
     const peer = new WebRTCLib.RTCPeerConnection(DEFAULT_ICE)
     peer.oniceconnectionstatechange = this.on_ICE_Connection_State_Change
     peer.onaddstream = this.on_Add_Stream
+    peer.onicecandidate = this.on_ICE_Candiate
+
+    console.info('localStream:', this.localStream)
+    peer.addStream(this.localStream)
     this.peer = peer
+  }
+
+  async handleConnect(e) {
+    await this.setupWebRTC()
+    const { peer } = this
+
+    try {
+            // Create Offer
+      const offer = await peer.createOffer()
+      self.offer = offer
+      console.info('offer:', offer)
+
+      await peer.setLocalDescription(offer)
+      console.info('localDescription set!')
+
+      // TODO: should send localDescription or offer
+      // For now send localDescription
+      
+
+    } catch (e) {
+      console.error('Failed to setup local offer')
+      console.error(e.message)
+    }
+
+    this.sendMessage({
+      type: 'offer',
+      payload: this.peer.localDescription
+    })
   }
 
   on_ICE_Connection_State_Change(e) {
@@ -103,7 +149,27 @@ export default class App extends React.Component {
     })
   }
 
+  on_ICE_Candiate(e) {
+    console.info('ICE Candidate Found:', e)
+    const { candidate } = e
+    debugger
+    this.sendMessage({
+      type: 'remote_candidate',
+      payload: candidate
+    })
+  }
+
+  on_Remote_ICE_Candidate(data) {
+    debugger
+    if (data.payload) {
+      this.peer.addIceCandidate(new RTCIceCandidate(data.payload))      
+    } else {
+      console.info('Remote ICE Candidates Gathered!')
+    }
+  }
+
   on_Add_Stream(e) {
+    debugger
     console.info('Remote Stream Added:', e.stream)
     this.setState({
       remoteStreamURL: e.stream.toURL()
@@ -111,11 +177,64 @@ export default class App extends React.Component {
     this.remoteStream = e.stream
   }
 
+  on_Offer_Received(data) {
+    debugger
+    this.setState({
+      offer_received: true,
+      offer_answered: false,
+      offer: data
+    })
+  }
+
+  async on_Answer_Received(data) {
+    const { payload } = data
+    await this.peer.setRemoteDescription(new WebRTCLib.RTCSessionDescription(payload))
+  }
+
+  async handleAnswer() {
+    try {
+      const { payload } = this.state.offer
+      await this.setupWebRTC()
+      
+      const { peer } = this
+      
+      await peer.setRemoteDescription(new WebRTCLib.RTCSessionDescription(payload))
+      const answer = await peer.createAnswer()
+      await peer.setLocalDescription(answer)
+
+      this.sendMessage({
+        type: 'answer',
+        payload: peer.localDescription
+      })
+
+      this.setState({
+        offer_answered: true
+      })
+    } catch (e) {
+      debugger
+    }
+
+  }
+
+  sendMessage(msgObj) {
+    const { ws } = this
+    if (ws && ws.readyState === 1) {
+      ws.send(JSON.stringify(msgObj))
+    } else {
+      const e = {
+        code: 'websocket_error',
+        message: 'WebSocket state:' + ws.readyState
+      }
+      throw e
+    }
+  }
+
   componentDidMount() {
 
     // Setup Socket
     const ws = new WebSocketClient(HOST);
     const self = this
+    self.ws = ws
 
     ws.onopen = () => {
       console.info('Socket Connected!')
@@ -128,8 +247,25 @@ export default class App extends React.Component {
       self.setState({
         connected: true
       })
+      let msg = {}
+      const { data } = e
+      try { msg = JSON.parse(data)} catch(e) {
+        console.error('Invalid message:', data)
+      }
+      console.info('New Message:', data)
       // a message was received
-      console.log('Socket:', e.data);
+      if (msg) {
+        if (msg.type === 'offer') {
+          this.on_Offer_Received(msg)
+        } else if (msg.type === 'remote_candidate') {
+          this.on_Remote_ICE_Candidate(msg)
+        } else if (msg.type === 'answer') {
+          this.on_Answer_Received(msg)
+        } else {
+          console.error('Unknown message:', msg)
+        }
+
+      }
     };
 
     ws.onerror = e => {
@@ -195,7 +331,7 @@ const styles = StyleSheet.create({
   bottomView: {
     height: 20,
     flex: 1,
-    bottom: 40,
+    bottom: 80,
     position: 'absolute',
     alignItems: 'center'
   },
