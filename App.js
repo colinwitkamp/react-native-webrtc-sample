@@ -23,16 +23,16 @@ const DEFAULT_ICE = {
 // we need to fork react-native-webrtc for relay-only to work.
 //  iceTransportPolicy: "relay",
   iceServers: [
-    {
-      urls: ['turn:s2.xirsys.com:80?transport=tcp'],
-      username: '8a63bcac-e16a-11e7-a86e-a62bc0457e71',
-      credential: '8a63bdd8-e16a-11e7-b7e2-48f12b7ac2d8'
-    },
     // {
-    //   urls: 'turn:turn.msgsafe.io:443?transport=tcp',
-    //   username: 'a9a2b514',
-    //   credential: '00163e7826d6'
+    //   urls: 'turn:s2.xirsys.com:80?transport=tcp',
+    //   username: '8a63bcac-e16a-11e7-a86e-a62bc0457e71',
+    //   credential: '8a63bdd8-e16a-11e7-b7e2-48f12b7ac2d8'
     // },
+    {
+      urls: 'turn:turn.msgsafe.io:443?transport=tcp',
+      username: 'a9a2b514',
+      credential: '00163e7826d6'
+    },
     /* Native libraries DO NOT fail over correctly.
     {
       urls: 'turn:turn.msgsafe.io:443',
@@ -56,10 +56,12 @@ export default class App extends React.Component {
     this.on_Answer_Received = this.on_Answer_Received.bind(this)
     this.setupWebRTC = this.setupWebRTC.bind(this)
     this.handleAnswer = this.handleAnswer.bind(this)
+    this.on_Remote_ICE_Candidate = this.on_Remote_ICE_Candidate.bind(this)
+
     this.state = {
       connected: false,
       ice_connection_state: '',
-
+      pendingCandidates: []
     }
   }
 
@@ -121,6 +123,7 @@ export default class App extends React.Component {
     try {
             // Create Offer
       const offer = await peer.createOffer()
+      console.info('Offer Created:', offer)
       self.offer = offer
       console.info('offer:', offer)
 
@@ -134,12 +137,8 @@ export default class App extends React.Component {
     } catch (e) {
       console.error('Failed to setup local offer')
       console.error(e.message)
+      return
     }
-
-    this.sendMessage({
-      type: 'offer',
-      payload: this.peer.localDescription
-    })
   }
 
   on_ICE_Connection_State_Change(e) {
@@ -147,29 +146,66 @@ export default class App extends React.Component {
     this.setState({
       ice_connection_state: e.target.iceConnectionState
     })
+
+    switch (e.target.iceConnectionState) {
+      case 'closed':
+      case 'disconnected':
+      case 'failed':
+        if (this.peer) {
+          this.peer.close()
+          this.setState({
+            remoteStreamURL: null
+          })
+          this.remoteStream = null
+        }
+        break
+    }
   }
 
   on_ICE_Candiate(e) {
-    console.info('ICE Candidate Found:', e)
     const { candidate } = e
-    debugger
-    this.sendMessage({
-      type: 'remote_candidate',
-      payload: candidate
-    })
+    console.info('ICE Candidate Found:', candidate)
+
+    if (candidate) {
+      let pendingRemoteIceCandidates = this.state.pendingCandidates
+      if (Array.isArray(pendingRemoteIceCandidates)) {
+        this.setState({
+          pendingCandidates: [...pendingRemoteIceCandidates, candidate]
+        })
+      } else {
+        this.setState({
+          pendingCandidates: [candidate]
+        })
+      }
+    } else { // Candidate gathering complete
+      if (this.state.pendingCandidates.length > 1) {
+        this.sendMessage({
+          type: this.state.offer_received ? 'answer' : 'offer',
+          payload: {
+            description: this.peer.localDescription,
+            candidates: this.state.pendingCandidates
+          }
+        })
+      } else {
+        console.error('Failed to send an offer/answer: No candidates')
+        debugger
+      }
+    }
   }
 
-  on_Remote_ICE_Candidate(data) {
-    debugger
+  async on_Remote_ICE_Candidate(data) {
     if (data.payload) {
-      this.peer.addIceCandidate(new RTCIceCandidate(data.payload))      
+      if (this.peer) {
+        await this.peer.addIceCandidate(new RTCIceCandidate(data.payload))        
+      } else {
+        console.error('Peer is not ready')
+      }
     } else {
       console.info('Remote ICE Candidates Gathered!')
     }
   }
 
   on_Add_Stream(e) {
-    debugger
     console.info('Remote Stream Added:', e.stream)
     this.setState({
       remoteStreamURL: e.stream.toURL()
@@ -188,32 +224,29 @@ export default class App extends React.Component {
 
   async on_Answer_Received(data) {
     const { payload } = data
-    await this.peer.setRemoteDescription(new WebRTCLib.RTCSessionDescription(payload))
+    await this.peer.setRemoteDescription(new WebRTCLib.RTCSessionDescription(payload.description))
+    payload.candidates.forEach(c => this.peer.addIceCandidate(new RTCIceCandidate(c)))
+    this.setState({
+      answer_recevied: true
+    })
   }
 
   async handleAnswer() {
-    try {
-      const { payload } = this.state.offer
-      await this.setupWebRTC()
-      
-      const { peer } = this
-      
-      await peer.setRemoteDescription(new WebRTCLib.RTCSessionDescription(payload))
-      const answer = await peer.createAnswer()
-      await peer.setLocalDescription(answer)
+    const { payload } = this.state.offer
+    await this.setupWebRTC()
+    
+    const { peer } = this
+    
+    await peer.setRemoteDescription(new WebRTCLib.RTCSessionDescription(payload.description))
 
-      this.sendMessage({
-        type: 'answer',
-        payload: peer.localDescription
-      })
-
-      this.setState({
-        offer_answered: true
-      })
-    } catch (e) {
-      debugger
+    if (Array.isArray(payload.candidates)) {
+      payload.candidates.forEach((c) => peer.addIceCandidate(new RTCIceCandidate(c)))
     }
-
+    const answer = await peer.createAnswer()
+    await peer.setLocalDescription(answer)
+    this.setState({
+      offer_answered: true
+    })
   }
 
   sendMessage(msgObj) {
@@ -226,6 +259,12 @@ export default class App extends React.Component {
         message: 'WebSocket state:' + ws.readyState
       }
       throw e
+    }
+  }
+
+  componentWillUnmount() {
+    if (this.peer) {
+      this.peer.close()
     }
   }
 
@@ -257,14 +296,11 @@ export default class App extends React.Component {
       if (msg) {
         if (msg.type === 'offer') {
           this.on_Offer_Received(msg)
-        } else if (msg.type === 'remote_candidate') {
-          this.on_Remote_ICE_Candidate(msg)
         } else if (msg.type === 'answer') {
           this.on_Answer_Received(msg)
         } else {
           console.error('Unknown message:', msg)
         }
-
       }
     };
 
@@ -288,7 +324,6 @@ export default class App extends React.Component {
     MediaStreamTrack
       .getSources()
       .then(sourceInfos => {
-        console.log(sourceInfos);
         let videoSourceId;
         for (let i = 0; i < sourceInfos.length; i++) {
           const sourceInfo = sourceInfos[i];
